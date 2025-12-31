@@ -1,0 +1,63 @@
+free c: channel.
+
+type G. type scalar. type key. type token. type nonce.
+
+(* --- 1. key agreement --- *)
+const g: G.
+fun exp(G, scalar): G.
+equation forall a: scalar, b: scalar; exp(exp(g, a), b) = exp(exp(g, b), a).
+
+fun kdf(G, nonce, nonce): nonce.
+
+(* --- 2. sign, AEAD --- *)
+fun pk(key): G. 
+fun sign(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; verify(m, sign(m, k), pk(k)) = true.
+
+fun aead_enc(bitstring, nonce): bitstring.
+reduc forall m: bitstring, k: nonce; aead_dec(aead_enc(m, k), k) = m.
+
+(* --- 3. security target--- *)
+free Token1: token [private].
+free secret_data: bitstring [private].
+query attacker(Token1).
+query attacker(secret_data).
+
+(* --- 4.process definition--- *)
+let processD(skD: key, pkS: G) =
+    new a: scalar;
+    let Qd = exp(g, a) in
+    new Nd: nonce;
+    new Td: bitstring;
+    
+    (* M1 *)
+    let m1_payload = (Qd, Nd, Td) in
+    out(c, (Token1, Qd, Nd, Td, sign(m1_payload, skD)));
+    
+    (* M2 *)
+    in(c, (Qs: G, Ns: nonce, s2: bitstring));
+    if verify((Qs, Ns, Nd), s2, pkS) = true then (
+        let shared_secret = exp(Qs, a) in
+        let k_session = kdf(shared_secret, Nd, Ns) in
+        out(c, aead_enc(secret_data, k_session))
+    ).
+
+let processS(skS: key, pkD: G) =
+    in(c, (t_rec: token, Qd_rec: G, Nd_rec: nonce, Td_rec: bitstring, s_rec: bitstring));
+    if verify((Qd_rec, Nd_rec, Td_rec), s_rec, pkD) = true then (
+        new b: scalar;
+        let Qs = exp(g, b) in
+        new Ns: nonce;
+        out(c, (Qs, Ns, sign((Qs, Ns, Nd_rec), skS)));
+        
+        let shared_secret = exp(Qd_rec, b) in
+        let k_session = kdf(shared_secret, Nd_rec, Ns) in
+        0
+    ).
+
+process
+    new skD: key; new skS: key;
+    let pkD = pk(skD) in
+    let pkS = pk(skS) in
+    out(c, pkD); out(c, pkS);
+    ((!processD(skD, pkS)) | (!processS(skS, pkD)))
